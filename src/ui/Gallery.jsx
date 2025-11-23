@@ -35,10 +35,6 @@ export default function Gallery() {
         if (!item?.svgPath && !item?.svg) return;
         sessionStorage.setItem("selectedDrawingId", item.id);
         sessionStorage.setItem("selectedSource", item.isTemplate ? "template" : "local");
-        // Speichere das graphJSON für Templates
-        if (item.isTemplate && item.graphJSON) {
-            sessionStorage.setItem("templateGraphJSON", JSON.stringify(item.graphJSON));
-        }
         navigate("/start");
     }, [navigate]);
 
