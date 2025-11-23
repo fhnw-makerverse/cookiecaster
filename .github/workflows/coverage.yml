@@ -1,0 +1,57 @@
+name: Code Coverage Report
+
+on:
+  push:
+    branches:
+      - development
+      - main
+  pull_request:
+    branches:
+      - development
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  coverage:
+    name: Generate Test Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+  
+      - name: Install dependencies
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install
+
+      - run: npm install
+
+      - run: npm run coverage
+
+      - run: npm run coverage:badge
+
+      - name: Commit and push updated badge
+        run: |
+          git config user.name "cookiecaster+actions"
+          git config user.email "cookiecaster+actions@github.com"
+
+          # Check if README.md has changes
+          if ! git diff --quiet README.md; then
+            git add README.md
+            git commit -m "Update coverage badge [skip ci]"
+            git push
+          else
+            echo "README.md has no changes, skipping commit"
+          fi
+          
+
+      - name: Upload coverage report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/lcov-report

@@ -254,6 +254,43 @@ export default function Start() {
                 return {x: Math.round(x), y: Math.round(y)};
             };
 
+            // Lade ausgewählte Zeichnung oder Template
+            const selectedId = sessionStorage.getItem("selectedDrawingId");
+            const selectedSource = sessionStorage.getItem("selectedSource");
+
+            if (selectedId) {
+                try {
+                    let graphData = null;
+
+                    if (selectedSource === "template") {
+                        // Template aus sessionStorage laden
+                        const templateJSON = sessionStorage.getItem("templateGraphJSON");
+                        if (templateJSON) {
+                            graphData = JSON.parse(templateJSON);
+                        }
+                    } else if (selectedSource === "local") {
+                        // LocalStorage-Zeichnung laden
+                        const drawings = getAllDrawings();
+                        const drawing = drawings.find(d => d.id === selectedId);
+                        if (drawing?.graphJSON) {
+                            graphData = drawing.graphJSON;
+                        }
+                    }
+
+                    if (graphData) {
+                        Graph.instance.fromJSON(graphData);
+                        SvgHandler.instance.redraw();
+                    }
+                } catch (err) {
+                    console.error("Fehler beim Laden der Zeichnung:", err);
+                } finally {
+                    // Cleanup sessionStorage
+                    sessionStorage.removeItem("selectedDrawingId");
+                    sessionStorage.removeItem("selectedSource");
+                    sessionStorage.removeItem("templateGraphJSON");
+                }
+            }
+
 // mouse/touch handlers using D3 v6+ pointer API
             const onDown = (evt) => {
                 if (analyze.status) SvgHandler.instance.clearWarnings();

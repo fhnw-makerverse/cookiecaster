@@ -2,8 +2,8 @@ name: Deploy GitHub Pages
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ jobs:
             - name: Set up Node.js
               uses: actions/setup-node@v6
               with:
-                  node-version: 22
+                  node-version: 24
 
             - name: Install dependencies
               run: |
@@ -26,7 +26,13 @@ jobs:
                 npm install
 
             - name: Build project
-              run: npm run build
+              run: |
+                START_TIME=$(date +%s)
+                npm run build
+                END_TIME=$(date +%s)
+                BUILD_TIME=$((END_TIME - START_TIME))
+                echo "Build completed in ${BUILD_TIME} seconds"
+                echo "${BUILD_TIME}" > build-time.txt
 
             - name: Deploy to GitHub Pages
               run: | 
@@ -34,3 +40,11 @@ jobs:
                 npm run deploy -- -u "github-actions-bot <cookiecaster+actions@github.com>"
               env:
                 GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Upload build artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                name: build-artifacts
+                path: |
+                    dist/
+                    build-time.txt

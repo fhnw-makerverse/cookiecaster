@@ -1,0 +1,59 @@
+name: Release New Version
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+    release:
+        name: Create Release Tag and Notes
+        runs-on: ubuntu-latest
+        if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Check if version tag exists
+              id: check_tag
+              run: |
+                VERSION_TAG="v$(cat VERSION.md | tr -d ' \n')"
+                if git rev-parse "$VERSION_TAG" >/dev/null 2>&1; then
+                  echo "tag_exists=true" >> $GITHUB_OUTPUT
+                else
+                  echo "tag_exists=false" >> $GITHUB_OUTPUT
+                fi
+
+            - name: Check if Version is greater than latest tag
+              id: check_version
+              run: |
+                LATEST_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
+                LATEST_VERSION=${LATEST_TAG#v}
+                NEW_VERSION=$(cat VERSION.md | tr -d ' \n')
+                
+                if [ "$(printf '%s\n%s\n' "$NEW_VERSION" "$LATEST_VERSION" | sort -V | head -n1)" = "$LATEST_VERSION" ] && [ "$NEW_VERSION" != "$LATEST_VERSION" ]; then
+                  echo "is_greater=true" >> $GITHUB_OUTPUT
+                else
+                  echo "is_greater=false" >> $GITHUB_OUTPUT
+                fi
+
+            - name: Create Tag and Push
+              if: steps.check_tag.outputs.tag_exists == 'false' && steps.check_version.outputs.is_greater == 'true'
+              run: |
+                git config user.name "cookiecaster+actions"
+                git config user.email "cookiecaster+actions@github.com"
+                NEW_VERSION=$(cat VERSION.md | tr -d ' \n')
+                git tag -a "v$NEW_VERSION" -m "Release version $NEW_VERSION
+                git push origin "v$NEW_VERSION"
+        
+            - name: Generate Release Notes
+              if: steps.check_tag.outputs.tag_exists == 'false' && steps.check_version.outputs.is_greater == 'true'
+              uses: softprops/action-gh-release@v2
+              with:
+                tag_name: "v$(cat VERSION.md | tr -d ' \n')"
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
