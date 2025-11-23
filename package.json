@@ -2,7 +2,7 @@
   "name": "cookiecaster3.0",
   "homepage": "https://github.com/fhnw-makerverse/cookiecaster",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -21,7 +21,13 @@
       "!src/**/*.test.js"
     ],
     "coverageDirectory": "coverage",
-    "coverageReporters": ["json", "json-summary", "lcov", "text", "html"]
+    "coverageReporters": [
+      "json",
+      "json-summary",
+      "lcov",
+      "text",
+      "html"
+    ]
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^7.1.0",
