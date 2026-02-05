@@ -24,7 +24,6 @@ This guide explains **how to contribute**, **how branching works**, and **how re
   - [Releasing](#releasing)
 - [How to Review](#how-to-review)
 - [Merging to Main](#merging-to-main)
-- [Merging Releases](#merging-releases)
 - [React Projet Structure](#react-project-structure)
   - [Directory Structure](#directory-structure)
   - [React Components Structure](#react-components-structure)
@@ -259,7 +258,7 @@ The release process is fully automated using CI/CD.
 
 #### Manual Releasing
 
-To create a release with a specific version number, a dedicated GitHub Action can be triggered manually.  
+To create a release with a specific version number, a dedicated [GitHub Action](https://github.com/fhnw-makerverse/cookiecaster/actions/workflows/release_manual.yml) can be triggered manually.  
 You only need to provide the version number, which must be greater than the latest existing tag and must not already exist. This process should be used for releases that include significant fixes or new features.
 
 The following steps are performed automatically:
@@ -275,7 +274,7 @@ The following steps are performed automatically:
 
 > **Note for Maintainers**
 >
-> At the moment this doesn't run, because there are restrictions for scheduled actions in the GitHub Organization
+> This is disabled, because a Release should always be controlled. Only acitvate if you want uncontrolled Releases.
 
 If no release is triggered manually, the system automatically checks for new commits since the latest tag and creates a **minor release** if changes are detected.  
 For larger or breaking changes, please trigger a manual release as described in [Manual Releasing](#manual-releasing).
@@ -313,16 +312,6 @@ If all checks pass, the pull request may be merged.
 - Only merges from a fork into `main` are permitted.
 - The release process is handled automatically and runs on a scheduled basis (daily).
 - Changes to `VERSION.md` are **not required** for automated releases.
-
-### Release behavior:
-
-- If no significant changes are detected, no release is created.
-- If new commits are detected since the latest tag:
-  - A new release is created automatically.
-  - The version is incremented according to the automated release strategy.
-  - Deployment is triggered automatically.
-
-For significant or breaking changes, please use the [Manual Releasing](#manual-releasing) process.
 
 
 ---

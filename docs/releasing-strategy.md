@@ -13,13 +13,12 @@ Before creating a release, please make sure you are familiar with:
 
 ## Releasing a New Version
 
-CookieCaster supports **manual releases** for significant changes and **automatic releases** for regular updates.
-
+CookieCaster supports **manual releases** for Release creation.
 ---
 
 ## Manual Releasing
 
-Manual releases are intended for **major changes, important fixes, or new features** that require explicit version control.
+Manual releases are intended for **major changes, important fixes, or new features** that require explicit version control. It should be used always.
 
 ### Triggering a Manual Release
 
@@ -70,8 +69,6 @@ A scheduled GitHub Action runs **daily at 19:00 UTC** and performs the following
    - A GitHub Release is created.
    - The application is deployed to GitHub Pages using the `gh-pages` branch.
 3. If no new commits are found, no release is created.
-
-For larger or breaking changes, please use the **manual releasing** process described above.
 
 ---
 
