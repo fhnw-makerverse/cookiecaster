@@ -27,10 +27,12 @@ function makeStorage() {
   };
 }
 
-// d3 mock with handler registry: select("#id").on("click", fn) etc.
+// d3 mock with handler registry + simple state for attrs/classes/properties
 function makeD3Mock() {
   const registry = new Map(); // key: `${selector}|${event}` => fn
   const attrs = new Map(); // key: `${selector}|${attr}` => value
+  const classes = new Map(); // key: `${selector}|class:${name}` => bool
+  const props = new Map(); // key: `${selector}|prop:${name}` => value
 
   const svgNode = { __isSvgNode: true };
 
@@ -38,11 +40,20 @@ function makeD3Mock() {
     const sel = {
       attr: jest.fn((k, v) => {
         attrs.set(`${selector}|${k}`, v);
-        return sel; // ✅ chain safely
+        return sel;
+      }),
+      classed: jest.fn((k, v) => {
+        classes.set(`${selector}|class:${k}`, Boolean(v));
+        return sel;
+      }),
+      property: jest.fn((k, v) => {
+        props.set(`${selector}|prop:${k}`, v);
+        return sel;
       }),
       on: jest.fn((event, fn) => {
+        // d3 allows namespaces like ".pointerdown" — treat as distinct key
         registry.set(`${selector}|${event}`, fn);
-        return sel; // ✅ chain safely
+        return sel;
       }),
       node: jest.fn(() => nodeObj),
       remove: jest.fn(() => {
@@ -55,24 +66,31 @@ function makeD3Mock() {
   const d3 = {
     __registry: registry,
     __attrs: attrs,
+    __classes: classes,
+    __props: props,
     __svgNode: svgNode,
 
     selectAll: jest.fn((selector) => makeSelection(`ALL:${selector}`)),
     select: jest.fn((selectorOrNode) => {
-      // if passed an element-ish object (like svgRef.current), return SVG selection
       if (selectorOrNode && typeof selectorOrNode === "object") {
         return makeSelection("SVG", svgNode);
       }
       return makeSelection(String(selectorOrNode));
     }),
 
-    pointer: jest.fn((_evt, _node) => [10.4, 20.6]), // will be rounded to {10,21}
+    pointer: jest.fn((_evt, _node) => [10.4, 20.6]), // rounds to {10,21}
   };
 
   return d3;
 }
 
-async function loadFresh({ selectedSource, selectedId, templateGraphJSON, localDrawings } = {}) {
+async function loadFresh({
+                           selectedSource,
+                           selectedId,
+                           templateGraphJSON,
+                           localDrawings,
+                           graphToJSON,
+                         } = {}) {
   jest.resetModules();
   jest.clearAllMocks();
   lastCleanup = undefined;
@@ -98,8 +116,23 @@ async function loadFresh({ selectedSource, selectedId, templateGraphJSON, localD
     __keyHandlers: keyHandlers,
   };
 
-  // Needed because hook uses document.querySelector("#reset")?.click()
+  // MutationObserver used by hook
+  const obs = [];
+  globalThis.MutationObserver = class {
+    constructor(cb) {
+      this.cb = cb;
+      obs.push(this);
+      this.observe = jest.fn();
+      this.disconnect = jest.fn();
+    }
+  };
+  globalThis.__mutationObservers = obs;
+
+  const d3 = makeD3Mock();
+
+  // Needed because hook does document.querySelector("#reset")?.click()
   globalThis.document = {
+    body: { __isBody: true },
     querySelector: jest.fn((sel) => {
       if (sel !== "#reset") return null;
       return {
@@ -113,12 +146,10 @@ async function loadFresh({ selectedSource, selectedId, templateGraphJSON, localD
 
   globalThis.alert = jest.fn();
 
-  const d3 = makeD3Mock();
-
-  // ✅ IMPORTANT: hook uses graphSvc, not Graph.instance
+  // services injected via useServices()
   graphSvc = {
     fromJSON: jest.fn(),
-    toJSON: jest.fn(() => ({ g: 1 })),
+    toJSON: jest.fn(() => (graphToJSON !== undefined ? graphToJSON : { g: 1 })),
   };
 
   svgh = {
@@ -145,7 +176,9 @@ async function loadFresh({ selectedSource, selectedId, templateGraphJSON, localD
     mirror: jest.fn(),
   };
   Object.defineProperty(ctr, "mode", {
-    get() { return this._mode; },
+    get() {
+      return this._mode;
+    },
     set(newMode) {
       if (newMode === this._mode) return;
       if (this._mode && typeof this._mode.disable === "function") this._mode.disable();
@@ -167,13 +200,12 @@ async function loadFresh({ selectedSource, selectedId, templateGraphJSON, localD
   }));
   await jest.unstable_mockModule("d3", () => ({ __esModule: true, ...d3 }));
 
-  // ✅ IMPORTANT: mock ServicesProvider to inject controller/graph/svgHandler
   await jest.unstable_mockModule(
-    "../../src/business-logic/services/ServicesProvider.jsx",
-    () => ({
-      __esModule: true,
-      useServices: () => ({ controller: ctr, graph: graphSvc, svgHandler: svgh }),
-    })
+      "../../src/business-logic/services/ServicesProvider.jsx",
+      () => ({
+        __esModule: true,
+        useServices: () => ({ controller: ctr, graph: graphSvc, svgHandler: svgh }),
+      })
   );
 
   await jest.unstable_mockModule("../../src/utils/FileImport.js", () => ({
@@ -187,8 +219,8 @@ async function loadFresh({ selectedSource, selectedId, templateGraphJSON, localD
   }));
 
   ({ default: useCanvasInteractions } = await import(
-    "../../src/ui/pages/Start/hooks/useCanvasInteractions.js"
-  ));
+      "../../src/ui/pages/Start/hooks/useCanvasInteractions.js"
+      ));
 
   return { d3 };
 }
@@ -204,7 +236,6 @@ function runHook({ d3, analyzeStatus = false } = {}) {
   });
 
   expect(reactMock.useEffect).toHaveBeenCalled();
-
   return { api, svgRef, d3 };
 }
 
@@ -213,22 +244,25 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // run cleanup if your hook returns one
   if (typeof lastCleanup === "function") lastCleanup();
 });
 
 describe("useCanvasInteractions (no jsdom)", () => {
-  test("exportToFile: calls graphSvc.toJSON and exportCC3File(data,'drawing')", async () => {
-    const { d3 } = await loadFresh();
+  test("exportToFile (api): calls graphSvc.toJSON and exportCC3File(data,'drawing')", async () => {
+    const { d3 } = await loadFresh({ graphToJSON: { nodes: [1], edges: [] } });
     const { api } = runHook({ d3 });
+
+    // clear calls made by useEffect/updateSaveButtonEnabled during mount
+    graphSvc.toJSON.mockClear();
+    exportCC3FileMock.mockClear();
 
     api.exportToFile();
 
     expect(graphSvc.toJSON).toHaveBeenCalledTimes(1);
-    expect(exportCC3FileMock).toHaveBeenCalledWith({ g: 1 }, "drawing");
+    expect(exportCC3FileMock).toHaveBeenCalledWith({ nodes: [1], edges: [] }, "drawing");
   });
 
-  test("importFromFile: early return when importCC3File returns null", async () => {
+  test("importFromFile (api): early return when importCC3File returns null", async () => {
     const { d3 } = await loadFresh();
     const { api } = runHook({ d3 });
 
@@ -241,7 +275,7 @@ describe("useCanvasInteractions (no jsdom)", () => {
     expect(globalThis.alert).not.toHaveBeenCalled();
   });
 
-  test("importFromFile: success resets controller, loads graphJSON stringified if needed, sets mode to new MODE_SELECT and enables it, alerts", async () => {
+  test("importFromFile (api): success resets controller, loads graphJSON as string, sets mode to MODE_SELECT, alerts", async () => {
     const { d3 } = await loadFresh();
     const { api } = runHook({ d3 });
 
@@ -260,12 +294,15 @@ describe("useCanvasInteractions (no jsdom)", () => {
     expect(arg).toContain('"foo":1');
 
     expect(svgh.updateMessage).toHaveBeenCalledTimes(1);
+    expect(ctr.mode).toBe(ctr.modi.MODE_SELECT);
     expect(enableSpy).toHaveBeenCalledTimes(1);
     expect(globalThis.alert).toHaveBeenCalled();
   });
 
-  test("useEffect: sets navbar id, installs pointer + keyboard handlers, and initializes mode to MODE_DRAW when ctr.mode is falsy", async () => {
-    const { d3 } = await loadFresh();
+  test("useEffect: sets navbar id, installs pointer + keyboard handlers, initializes mode to MODE_DRAW when no figure loaded and ctr.mode falsy", async () => {
+    const { d3 } = await loadFresh({
+      graphToJSON: { nodes: [], edges: [] }, // no content
+    });
     ctr.mode = undefined;
 
     runHook({ d3 });
@@ -306,11 +343,12 @@ describe("useCanvasInteractions (no jsdom)", () => {
     expect(ctr.mouseMove).toHaveBeenCalledWith({ x: 10, y: 21 });
   });
 
-  test("pointerup: calls ctr.mouseUp and writes temp autosave to localStorage (saved drawings retained)", async () => {
+  test("pointerup: calls ctr.mouseUp, writes temp autosave to localStorage (saved drawings retained), and re-checks Save button state", async () => {
     const { d3 } = await loadFresh({
+      graphToJSON: { nodes: [1], edges: [] }, // content for autosave + enables save
       localDrawings: [
-        { id: "a", saved: true, graphJSON: { a: 1 } },
-        { id: "b", saved: false, graphJSON: { b: 2 } },
+        { id: "a", saved: true, graphJSON: { nodes: [1], edges: [] } },
+        { id: "b", saved: false, graphJSON: { nodes: [2], edges: [] } },
       ],
     });
     runHook({ d3 });
@@ -326,7 +364,7 @@ describe("useCanvasInteractions (no jsdom)", () => {
     const temp = saved.find((d) => d.id === "temp-autosave");
     expect(temp).toBeDefined();
     expect(temp.saved).toBe(false);
-    expect(temp.graphJSON).toEqual({ g: 1 });
+    expect(temp.graphJSON).toEqual({ nodes: [1], edges: [] });
     expect(typeof temp.timestamp).toBe("string");
   });
 
@@ -348,10 +386,10 @@ describe("useCanvasInteractions (no jsdom)", () => {
     onKeyDown({ key: "c", metaKey: true });
     expect(ctr.copy).toHaveBeenCalledTimes(2);
 
-    onKeyDown({ key: "x" });
+    onKeyDown({ key: "x" }); // no-op
   });
 
-  test("sidebar buttons: reset clears controller and removes unsaved drawings; mode buttons set ctr.mode; mirror/copy/erase call methods", async () => {
+  test("sidebar: reset clears controller and removes unsaved; mode buttons set ctr.mode; mirror/copy/erase call methods; analyze calls analyzeGraph", async () => {
     const { d3 } = await loadFresh({
       localDrawings: [
         { id: "keep", saved: true },
@@ -390,21 +428,40 @@ describe("useCanvasInteractions (no jsdom)", () => {
 
     d3.__registry.get("#analyze|click")();
     expect(analyzeGraphMock).toHaveBeenCalledTimes(1);
-
-    d3.__registry.get("#save|click")();
-    expect(saveGraphMock).toHaveBeenCalledTimes(1);
   });
 
-  test("sessionStorage load: template source parses templateGraphJSON, calls graphSvc.fromJSON + svgh.redraw, then clears session keys", async () => {
+  test("Save (.js-save): does NOT call saveGraph when graph has no content; DOES call when content exists", async () => {
+    // no content -> blocked
+    {
+      const { d3 } = await loadFresh({ graphToJSON: { nodes: [], edges: [] } });
+      runHook({ d3 });
+
+      const onSave = d3.__registry.get("ALL:.js-save|click");
+      onSave();
+      expect(saveGraphMock).not.toHaveBeenCalled();
+    }
+
+    // content -> allowed
+    {
+      const { d3 } = await loadFresh({ graphToJSON: { nodes: [1], edges: [] } });
+      runHook({ d3 });
+
+      const onSave = d3.__registry.get("ALL:.js-save|click");
+      onSave();
+      expect(saveGraphMock).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  test("sessionStorage load: template source parses templateGraphJSON, calls graphSvc.fromJSON, clears session keys", async () => {
     const { d3 } = await loadFresh({
       selectedId: "t1",
       selectedSource: "template",
-      templateGraphJSON: { hello: 1 },
+      templateGraphJSON: { nodes: [1], edges: [] },
     });
 
     runHook({ d3 });
 
-    expect(graphSvc.fromJSON).toHaveBeenCalledWith({ hello: 1 });
+    expect(graphSvc.fromJSON).toHaveBeenCalledWith({ nodes: [1], edges: [] });
 
     expect(sessionStorage.removeItem).toHaveBeenCalledWith("selectedDrawingId");
     expect(sessionStorage.removeItem).toHaveBeenCalledWith("selectedSource");
@@ -416,23 +473,78 @@ describe("useCanvasInteractions (no jsdom)", () => {
       selectedId: "L1",
       selectedSource: "local",
       localDrawings: [
-        { id: "L1", saved: true, graphJSON: { local: 123 } },
-        { id: "L2", saved: true, graphJSON: { local: 999 } },
+        { id: "L1", saved: true, graphJSON: { nodes: [9], edges: [] } },
+        { id: "L2", saved: true, graphJSON: { nodes: [8], edges: [] } },
       ],
     });
 
     runHook({ d3 });
 
-    expect(graphSvc.fromJSON).toHaveBeenCalledWith({ local: 123 });
+    expect(graphSvc.fromJSON).toHaveBeenCalledWith({ nodes: [9], edges: [] });
+  });
+
+  test("figureLoaded: if unsaved drawing with content exists, sets MODE_SELECT and removes #layer", async () => {
+    const { d3 } = await loadFresh({
+      localDrawings: [{ id: "tmp", saved: false, graphJSON: { nodes: [1], edges: [] } }],
+    });
+
+    runHook({ d3 });
+
+    expect(ctr.mode).toBe(ctr.modi.MODE_SELECT);
+    expect(d3.__registry.get("#layer|__removed")).toBe(true);
+  });
+
+  test("loadFromFile button: imports, clicks #reset, waits, loads graph, updates message, sets MODE_SELECT, alerts, and updates save state", async () => {
+    jest.useFakeTimers();
+
+    const { d3 } = await loadFresh({
+      graphToJSON: { nodes: [1], edges: [] },
+      localDrawings: [{ id: "drop", saved: false, graphJSON: { nodes: [1], edges: [] } }],
+    });
+    runHook({ d3 });
+
+    importCC3FileMock.mockResolvedValue({ graphJSON: { foo: 1 } });
+
+    // spy: the hook will call reset via document.querySelector("#reset")?.click()
+    // which triggers the "#reset|click" handler we registered.
+    const resetHandler = d3.__registry.get("#reset|click");
+    expect(resetHandler).toEqual(expect.any(Function));
+
+    const onLoad = d3.__registry.get("#loadFromFile|click");
+    const p = onLoad();
+
+    // allow the async handler to run until it hits the timeout
+    await Promise.resolve();
+
+    // advance the internal 50ms wait
+    jest.advanceTimersByTime(60);
+    await p;
+
+    expect(ctr.reset).toHaveBeenCalledTimes(1);
+
+    // loadFromFile uses stringification if needed
+    const arg = graphSvc.fromJSON.mock.calls.at(-1)[0];
+    expect(typeof arg).toBe("string");
+    expect(arg).toContain('"foo":1');
+
+    expect(svgh.updateMessage).toHaveBeenCalledTimes(1);
+    expect(ctr.mode).toBe(ctr.modi.MODE_SELECT);
+    expect(globalThis.alert).toHaveBeenCalled();
+
+    jest.useRealTimers();
   });
 
   test("exportToFile button: calls exportCC3File(graphSvc.toJSON(),'drawing')", async () => {
-    const { d3 } = await loadFresh();
+    const { d3 } = await loadFresh({ graphToJSON: { nodes: [1], edges: [] } });
     runHook({ d3 });
+
+    // clear calls made by useEffect/updateSaveButtonEnabled during mount
+    graphSvc.toJSON.mockClear();
+    exportCC3FileMock.mockClear();
 
     d3.__registry.get("#exportToFile|click")();
 
     expect(graphSvc.toJSON).toHaveBeenCalledTimes(1);
-    expect(exportCC3FileMock).toHaveBeenCalledWith({ g: 1 }, "drawing");
+    expect(exportCC3FileMock).toHaveBeenCalledWith({ nodes: [1], edges: [] }, "drawing");
   });
 });

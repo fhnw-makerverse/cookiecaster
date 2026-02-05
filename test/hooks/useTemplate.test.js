@@ -1,42 +1,106 @@
-/**
- * @jest-environment jsdom
- */
+import { describe, test, expect, jest, beforeEach, afterEach } from "@jest/globals";
 
-import React, { useEffect } from "react";
-import { createRoot } from "react-dom/client";
-import { act } from "react";
-import { useTemplates } from "../../src/ui/pages/Gallery/hooks/useTemplates.js";
+let useTemplates;
 
-let container = null;
-let root = null;
+// React hook mocks (no jsdom / no react-dom)
+let lastCleanup;
+const reactMock = {
+  useEffect: jest.fn((fn) => {
+    lastCleanup = fn?.();
+  }),
+};
+
+// Minimal state + memo engine for this hook
+function makeReactHookMock() {
+  // single state slot is enough for this hook in these tests
+  let state;
+  const setState = jest.fn((updater) => {
+    state = typeof updater === "function" ? updater(state) : updater;
+  });
+
+  let lastMemoDeps;
+  let lastMemoValue;
+
+  return {
+    __getState: () => state,
+    __resetState: () => {
+      state = undefined;
+      lastMemoDeps = undefined;
+      lastMemoValue = undefined;
+    },
+
+    useState: jest.fn((initial) => {
+      if (state === undefined) state = initial;
+      return [state, setState];
+    }),
+
+    useMemo: jest.fn((factory, deps) => {
+      const same =
+          Array.isArray(lastMemoDeps) &&
+          Array.isArray(deps) &&
+          lastMemoDeps.length === deps.length &&
+          lastMemoDeps.every((d, i) => Object.is(d, deps[i]));
+
+      if (!same) {
+        lastMemoDeps = deps;
+        lastMemoValue = factory();
+      }
+      return lastMemoValue;
+    }),
+
+    useEffect: reactMock.useEffect,
+  };
+}
+
+async function loadFresh() {
+  jest.resetModules();
+  jest.clearAllMocks();
+  lastCleanup = undefined;
+
+  const reactHooks = makeReactHookMock();
+
+  await jest.unstable_mockModule("react", () => ({
+    __esModule: true,
+    useState: reactHooks.useState,
+    useMemo: reactHooks.useMemo,
+    useEffect: reactHooks.useEffect,
+  }));
+
+  ({ useTemplates } = await import(
+      "../../src/ui/pages/Gallery/hooks/useTemplates.js"
+      ));
+
+  return { reactHooks };
+}
+
+function runHook({ reactHooks, files } = {}) {
+  // call the hook
+  const returned = useTemplates(files);
+
+  // because our useEffect runs immediately, it may set state,
+  // but there is no re-render; return both:
+  // - "returned" (what the hook returned on this call)
+  // - "templates" (the current state after effects ran)
+  return {
+    returned,
+    get templates() {
+      return reactHooks.__getState();
+    },
+  };
+}
 
 beforeEach(() => {
-  container = document.createElement("div");
-  document.body.appendChild(container);
-  root = createRoot(container);
+  jest.clearAllMocks();
 });
 
 afterEach(() => {
-  act(() => {
-    root.unmount();
-  });
-  container.remove();
-  container = null;
-  root = null;
+  if (typeof lastCleanup === "function") lastCleanup();
 });
 
-function TestComponent(props) {
-  const templates = useTemplates(props.files);
+describe("useTemplates (no jsdom, pure hook)", () => {
+  test("maps primary fields", async () => {
+    const { reactHooks } = await loadFresh();
 
-  useEffect(() => {
-    props.onResult(templates);
-  }, [templates]);
-
-  return null;
-}
-
-describe("useTemplates (no JSX, no extra deps)", () => {
-  test("maps primary fields", () => {
     const files = {
       "/templates/foo.json": {
         name: "Foo Template",
@@ -45,18 +109,9 @@ describe("useTemplates (no JSX, no extra deps)", () => {
       },
     };
 
-    let result;
+    const hook = runHook({ reactHooks, files });
 
-    act(() => {
-      root.render(
-        React.createElement(TestComponent, {
-          files,
-          onResult: (v) => (result = v),
-        })
-      );
-    });
-
-    expect(result).toEqual([
+    expect(hook.templates).toEqual([
       {
         id: "tpl-foo",
         name: "Foo Template",
@@ -67,7 +122,9 @@ describe("useTemplates (no JSX, no extra deps)", () => {
     ]);
   });
 
-  test("uses fallbacks", () => {
+  test("uses fallbacks", async () => {
+    const { reactHooks } = await loadFresh();
+
     const files = {
       "/x/bar.json": {
         svg: "<svg />",
@@ -75,18 +132,9 @@ describe("useTemplates (no JSX, no extra deps)", () => {
       },
     };
 
-    let result;
+    const hook = runHook({ reactHooks, files });
 
-    act(() => {
-      root.render(
-        React.createElement(TestComponent, {
-          files,
-          onResult: (v) => (result = v),
-        })
-      );
-    });
-
-    expect(result).toEqual([
+    expect(hook.templates).toEqual([
       {
         id: "tpl-bar",
         name: "bar",
@@ -97,45 +145,40 @@ describe("useTemplates (no JSX, no extra deps)", () => {
     ]);
   });
 
-  test("covers filename edge cases", () => {
+  test("covers filename edge cases", async () => {
+    const { reactHooks } = await loadFresh();
+
     const files = {
-      "baz": {},
+      baz: {},
       "/trailing/": {},
     };
 
-    let result;
+    const hook = runHook({ reactHooks, files });
 
-    act(() => {
-      root.render(
-        React.createElement(TestComponent, {
-          files,
-          onResult: (v) => (result = v),
-        })
-      );
-    });
-
-    expect(result).toHaveLength(2);
-    expect(result).toEqual(
-      expect.arrayContaining([
-        {
-          id: "tpl-baz",
-          name: "baz",
-          svgPath: "",
-          graphJSON: {},
-          isTemplate: true,
-        },
-        {
-          id: "tpl-",
-          name: "",
-          svgPath: "",
-          graphJSON: {},
-          isTemplate: true,
-        },
-      ])
+    expect(hook.templates).toHaveLength(2);
+    expect(hook.templates).toEqual(
+        expect.arrayContaining([
+          {
+            id: "tpl-baz",
+            name: "baz",
+            svgPath: "",
+            graphJSON: {},
+            isTemplate: true,
+          },
+          {
+            id: "tpl-",
+            name: "",
+            svgPath: "",
+            graphJSON: {},
+            isTemplate: true,
+          },
+        ])
     );
   });
 
-  test("updates when input changes", () => {
+  test("updates when input changes (simulate re-render)", async () => {
+    const { reactHooks } = await loadFresh();
+
     const filesA = {
       "/a.json": { name: "A", svgPath: "A", graphJSON: { a: 1 } },
     };
@@ -144,31 +187,15 @@ describe("useTemplates (no JSX, no extra deps)", () => {
       "/c.json": { svgPath: "C" },
     };
 
-    let result;
-
-    act(() => {
-      root.render(
-        React.createElement(TestComponent, {
-          files: filesA,
-          onResult: (v) => (result = v),
-        })
-      );
-    });
-
-    expect(result).toEqual([
+    // first render
+    let hook = runHook({ reactHooks, files: filesA });
+    expect(hook.templates).toEqual([
       { id: "tpl-a", name: "A", svgPath: "A", graphJSON: { a: 1 }, isTemplate: true },
     ]);
 
-    act(() => {
-      root.render(
-        React.createElement(TestComponent, {
-          files: filesB,
-          onResult: (v) => (result = v),
-        })
-      );
-    });
-
-    expect(result).toEqual([
+    // re-render with new props
+    hook = runHook({ reactHooks, files: filesB });
+    expect(hook.templates).toEqual([
       { id: "tpl-b", name: "B", svgPath: "B", graphJSON: { b: 2 }, isTemplate: true },
       { id: "tpl-c", name: "c", svgPath: "C", graphJSON: { svgPath: "C" }, isTemplate: true },
     ]);
